@@ -1,4 +1,7 @@
-# A Real Fly(Employee) trapped in a simulation (Office)
+# A Real Fly trapped in a simulation
+
+### A REAL FLY BRAIN SCANNED BY GOOGLE AND MADE INTO MODEL WEIGHTS (IF U HAVENT SEEN THIS IN INERNET)
+### BEHAVES LIKE A REAL FLY WHEN GIVEN A SYNTHETIC BODY AND ENV
 
 - A fly is spwanned when u click on.
 - The fly must find the button to turn off the pain.
@@ -16,12 +19,11 @@
 
 ## How this works
 
-1. This fly is a real fly brain scanned by google.
-2. The dataset maps bunch of neurons and synapses (connections between them)
-3. we take the data and plug onto a neural net.
-4. we map the neurons , and since the dataset i use didnt have a explicit marking for motor or pain neuron we just send the pain with high intensity through a neuron with many connections to pass the signal eventually to the pain or motor neuron.
-5. this works beutifully causing the fly to search for the region which reduces the signal streangth which is the button.
-6. And finally we 'kill' the fly.
+1. The dataset maps bunch of neurons and synapses (connections between them)
+2. we take the data and plug onto a neural net.
+3. we map the neurons , and since the dataset i use didnt have a explicit marking for motor or pain neuron we just send the pain with high intensity through a neuron with many connections to pass the signal eventually to the pain or motor neuron.
+4. this works beutifully causing the fly to search for the region which reduces the signal streangth which is the button.
+5. And finally we 'kill' the fly.
 
 https://github.com/Leonuraht/Claude_Shannon_Fly/raw/main/recording.mp4
 
