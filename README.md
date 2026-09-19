@@ -24,8 +24,7 @@
 6. And finally we 'kill' the fly.
 
 <video width="100%" controls>
-  <source src="recording.mp4" type="video/mp4">
+  <source src="https://github.com/Leonuraht/Claude_Shannon_Fly/blob/main/recording.mp4" type="video/mp4">
 </video>
 
-### I have no job and i must work                                                   
-### -fly
+***I have no job and i must work             -fly***
