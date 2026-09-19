@@ -23,8 +23,6 @@
 5. this works beutifully causing the fly to search for the region which reduces the signal streangth which is the button.
 6. And finally we 'kill' the fly.
 
-<video width="100%" controls>
-  <source src="https://github.com/Leonuraht/Claude_Shannon_Fly/raw/main/recording.mp4" type="video/mp4">
-</video>
+[video](https://github.com/Leonuraht/Claude_Shannon_Fly/raw/main/recording.mp4)
 
 ***I have no job and i must work             -fly***
