@@ -23,4 +23,11 @@
 5. this works beutifully causing the fly to search for the region which reduces the signal streangth which is the button.
 6. And finally we 'kill' the fly.
 
-### I have no job and i must work       -fly
+<video width="100%" controls>
+  <source src="recording.mp4" type="video/mp4">
+</video>
+
+
+
+### I have no job and i must work                                                   
+### -fly
