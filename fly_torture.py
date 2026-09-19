@@ -1,7 +1,5 @@
 pip install ursina torch numpy
 
-
-
 import torch
 import torch.nn as nn
 import numpy as np
@@ -16,89 +14,54 @@ EDGES_CSV = "/content/traced-total-connections.csv"
 NODES_CSV = "/content/traced-neurons.csv"
 
 
-REAL_PAIN_NEURONS = [5813020826, 5813020827, 5813020828] 
-REAL_GUT_NEURONS = [5813063640, 5813063641]
-REAL_MOTOR_NEURONS = [511236214, 511236215] 
-
-
-class HemibrainConnectome(nn.Module):
+class UselessBoxConnectome(nn.Module):
     def __init__(self, use_real_data, edges_path, nodes_path):
         super().__init__()
-        
         self.decay_rate = 0.85
         self.threshold = 1.0
         
         if use_real_data and os.path.exists(edges_path) and os.path.exists(nodes_path):
-            print("Loading REAL Google Hemibrain Connectome...")
-            
             edges = pd.read_csv(edges_path)
             nodes = pd.read_csv(nodes_path)
-
             unique_neurons = pd.concat([edges['bodyId_pre'], edges['bodyId_post']]).unique()
             self.num_neurons = len(unique_neurons)
-            print(f"Mapped {self.num_neurons} biological neurons.")
-            
             self.id_to_idx = {body_id: idx for idx, body_id in enumerate(unique_neurons)}
             
             nt_map = {}
             if 'nt_type' in nodes.columns:
                 nt_map = nodes.set_index('bodyId')['nt_type'].to_dict()
             else:
-                print("Notice: 'nt_type' column missing from CSV.")
-                print("Applying biological approximation (30% inhibitory) to stabilize the brain network...")
                 for nid in unique_neurons:
-                    if np.random.rand() < 0.30:
-                        nt_map[nid] = 'gaba'
+                    if np.random.rand() < 0.30: nt_map[nid] = 'gaba'
             
-            pre_indices = []
-            post_indices = []
-            weights = []
-            
+            pre_indices, post_indices, weights = [], [], []
             pre_ids = edges['bodyId_pre'].values
             post_ids = edges['bodyId_post'].values
             raw_weights = edges['weight'].values
             
             for i in range(len(edges)):
                 pre_id = pre_ids[i]
-                
                 pre_indices.append(self.id_to_idx[pre_id])
                 post_indices.append(self.id_to_idx[post_ids[i]])
-                
                 w = raw_weights[i] * 0.005 
-                
                 nt = str(nt_map.get(pre_id, '')).lower()
-                if 'gaba' in nt or 'glut' in nt:
-                    w *= -1.0 
-                    
+                if 'gaba' in nt or 'glut' in nt: w *= -1.0 
                 weights.append(w)
             
             indices = torch.tensor([pre_indices, post_indices], dtype=torch.long)
             values = torch.tensor(weights, dtype=torch.float32)
 
-            print("Locating highly connected hub neurons for sensory/motor pathways...")
-
             top_hubs = edges['bodyId_post'].value_counts().head(10).index.tolist()
-            
-  
             self.pain_idx = [self.id_to_idx[top_hubs[0]], self.id_to_idx[top_hubs[1]]]
-            self.gut_idx = [self.id_to_idx[top_hubs[2]], self.id_to_idx[top_hubs[3]]]
-            self.motor_idx = [self.id_to_idx[top_hubs[4]], self.id_to_idx[top_hubs[5]]]
+            self.motor_idx = [self.id_to_idx[top_hubs[2]], self.id_to_idx[top_hubs[3]]]
             
         else:
-            print("Warning: CSV files not found. Generating 130k balanced synthetic proxy...")
             self.num_neurons = 130000
             num_connections = 5000000 
-            
             indices = torch.randint(0, self.num_neurons, (2, num_connections))
             values = (torch.rand(num_connections) - 0.3) * 0.1 
-            
-            self.id_to_idx = {}
-            for i, bio_id in enumerate(REAL_PAIN_NEURONS + REAL_GUT_NEURONS + REAL_MOTOR_NEURONS):
-                self.id_to_idx[bio_id] = i
-                
-            self.pain_idx = [self.id_to_idx.get(nid, np.random.randint(0, 100)) for nid in REAL_PAIN_NEURONS]
-            self.gut_idx = [self.id_to_idx.get(nid, np.random.randint(100, 200)) for nid in REAL_GUT_NEURONS]
-            self.motor_idx = [self.id_to_idx.get(nid, np.random.randint(200, 300)) for nid in REAL_MOTOR_NEURONS]
+            self.pain_idx = [0, 1]
+            self.motor_idx = [2, 3]
 
         self.weights = torch.sparse_coo_tensor(indices, values, (self.num_neurons, self.num_neurons)).coalesce()
         self.membrane_potentials = torch.zeros(self.num_neurons)
@@ -113,67 +76,53 @@ class HemibrainConnectome(nn.Module):
         self.membrane_potentials[self.spikes > 0] = 0.0
         return self.spikes
 
-brain = HemibrainConnectome(USE_REAL_HEMIBRAIN, EDGES_CSV, NODES_CSV)
+brain = UselessBoxConnectome(USE_REAL_HEMIBRAIN, EDGES_CSV, NODES_CSV)
 
 fly_pos = np.array([0.0, 1.0, 0.0])
-stop_pain_btn_pos = np.array([25.0, 1.0, 25.0])
-stop_diarrhea_btn_pos = np.array([-25.0, 1.0, -25.0]) 
+switch_pos = np.array([25.0, 1.0, 25.0]) 
 fly_rotation = 0.0 
-fly_speed = 1.5 
-health = 100.0 
+fly_speed = 2.0 
+fly_alive = False
+death_count = 0
 
 
-def compute_tick(is_in_pain, is_in_diarrhea):
-    global fly_pos, fly_rotation, health
+def compute_tick(is_switch_on):
+    global fly_pos, fly_rotation, fly_alive, death_count
     
-    stimulus = torch.zeros(brain.num_neurons)
-    
-    if is_in_pain:
-        stimulus[brain.pain_idx] = 1.5  
-        health -= 1.5 
-    elif health < 100.0:
-        health = min(100.0, health + 0.2) 
 
-    if is_in_diarrhea:
-        stimulus[brain.gut_idx] = 1.5  
+    if is_switch_on and not fly_alive:
+        fly_alive = True
+        fly_pos = np.array([0.0, 1.0, 0.0])
         
-    if not is_in_pain and not is_in_diarrhea:
-        stimulus += (torch.rand(brain.num_neurons) * 0.02)  
+    stimulus = torch.zeros(brain.num_neurons)
+    switch_flipped_by_fly = False
 
-    spikes = brain(stimulus)
-    motor_activity = spikes[brain.motor_idx].sum().item()
-
-    pain_stopped = False
-    diarrhea_stopped = False
-    just_died = False
-
-    if health <= 0:
-        just_died = True
-        health = 100.0 
-        fly_pos = np.array([0.0, 1.0, 0.0]) 
-    else:
-        if is_in_pain and motor_activity > 0:
-            target_pos = stop_pain_btn_pos
-        elif is_in_diarrhea and motor_activity > 0:
-            target_pos = stop_diarrhea_btn_pos
+    if fly_alive:
+        if is_switch_on:
+            stimulus[brain.pain_idx] = 1.5  
         else:
-            target_pos = None
+            stimulus += (torch.rand(brain.num_neurons) * 0.02)  
 
-        if target_pos is not None:
-            direction = target_pos - fly_pos
+        spikes = brain(stimulus)
+        motor_activity = spikes[brain.motor_idx].sum().item()
+
+        if is_switch_on and motor_activity > 0:
+            direction = switch_pos - fly_pos
             distance = np.linalg.norm(direction)
             
             if distance > 0:
                 direction = direction / distance
                 ideal_rotation = np.arctan2(direction[0], direction[2])
-                fly_rotation = ideal_rotation + np.random.uniform(-1.0, 1.0)
+                fly_rotation = ideal_rotation + np.random.uniform(-0.8, 0.8)
                 
             forward = np.array([np.sin(fly_rotation), 0, np.cos(fly_rotation)])
             fly_pos += forward * fly_speed
             
-            if distance < 1.0: 
-                if is_in_pain: pain_stopped = True
-                if is_in_diarrhea: diarrhea_stopped = True
+
+            if distance < 1.5: 
+                switch_flipped_by_fly = True
+                fly_alive = False
+                death_count += 1
                 
         else:
             fly_rotation += np.random.uniform(-0.8, 0.8)
@@ -191,10 +140,9 @@ def compute_tick(is_in_pain, is_in_diarrhea):
         "y": float(fly_pos[1]), 
         "z": float(fly_pos[2]),
         "rotation": float(fly_rotation),
-        "health": float(health),
-        "pain_stopped": pain_stopped,
-        "diarrhea_stopped": diarrhea_stopped,
-        "just_died": just_died
+        "alive": fly_alive,
+        "switch_flipped": switch_flipped_by_fly,
+        "death_count": death_count
     })
 
 output.register_callback('compute_tick', compute_tick)
@@ -206,90 +154,112 @@ html_code = """
 <head>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
-    <style>
-        body { margin: 0; overflow: hidden; font-family: sans-serif; background: #000; }
+<style>
+        body { margin: 0; overflow: hidden; font-family: 'Courier New', Courier, monospace; background: #000; }
         #canvas-container { width: 100%; height: 500px; position: relative; }
-        #ui-container { position: absolute; top: 10px; left: 10px; z-index: 100; pointer-events: none; display: flex; flex-direction: column; gap: 10px; width: 300px;}
-        .action-btn { color: white; border: 2px solid white; padding: 15px 30px; font-size: 16px; border-radius: 5px; cursor: pointer; user-select: none; font-weight: bold; pointer-events: auto; transition: 0.2s;}
-        .action-btn:active { transform: scale(0.95); }
-        #zap-btn { background: #44aa44; }
-        #poop-btn { background: #44aa44; }
-        #health-container { width: 100%; height: 20px; background: #333; border: 2px solid white; border-radius: 5px; overflow: hidden; position: relative;}
-        #health-bar { width: 100%; height: 100%; background: #00ff00; transition: 0.1s; }
-        #health-text { position: absolute; top: 0; left: 50%; transform: translateX(-50%); font-weight: bold; color: white; font-size: 14px; text-shadow: 1px 1px 2px #000; }
-        #status { color: white; margin-top: 10px; font-weight: bold; font-size: 18px; text-shadow: 2px 2px 4px #000000; }
-        #error-log { color: #ffaa00; margin-top: 5px; font-family: monospace; font-size: 12px; }
+        
+        /* SLEEK CENTERED BOTTOM UI */
+        #ui-container { 
+            position: absolute; 
+            bottom: 20px; 
+            left: 50%; 
+            transform: translateX(-50%);
+            z-index: 100; 
+            pointer-events: none; 
+            display: flex; 
+            flex-direction: column; 
+            align-items: center;
+            gap: 12px; 
+            width: 380px;
+            background: rgba(20, 20, 30, 0.85);
+            padding: 20px;
+            border-radius: 12px;
+            border: 1px solid #444;
+            box-shadow: 0px 10px 30px rgba(0,0,0,0.8);
+            backdrop-filter: blur(4px);
+        }
+        
+        #useless-switch { 
+            color: white; 
+            border: 2px solid #fff; 
+            padding: 15px 30px; 
+            font-size: 22px; 
+            border-radius: 8px; 
+            cursor: pointer; 
+            user-select: none; 
+            font-weight: bold; 
+            pointer-events: auto; 
+            transition: 0.2s; 
+            background: #555; 
+            font-family: inherit; 
+            width: 100%;
+            letter-spacing: 1px;
+        }
+        #useless-switch:active { transform: scale(0.95); }
+        
+        #counter { color: #ffaa00; font-weight: bold; font-size: 16px; text-align: center; }
+        #status { color: #00ff00; font-weight: bold; font-size: 13px; text-align: center; margin-top: 5px; }
     </style>
 </head>
 <body>
     <div id="canvas-container">
         <div id="ui-container">
-            <div id="health-container">
-                <div id="health-bar"></div>
-                <div id="health-text">HP: 100</div>
-            </div>
-            <button id="zap-btn" class="action-btn">APPLY PAIN (OFF)</button>
-            <button id="poop-btn" class="action-btn">APPLY DIARRHEA (OFF)</button>
-            <div id="status">Status: Connecting to Hemibrain Connectome...</div>
-            <div id="error-log"></div>
+            <button id="useless-switch">SYSTEM [OFF]</button>
+            <div id="counter">EMPLOYEES SACRIFICED: 0</div>
+            <div id="status">Log: System idling. Awaiting user input.</div>
         </div>
     </div>
     <script>
-        let isPainActive = false;
-        let isDiarrheaActive = false;
-        const zapBtn = document.getElementById('zap-btn');
-        const poopBtn = document.getElementById('poop-btn');
+        let isSwitchOn = false;
+        const toggleBtn = document.getElementById('useless-switch');
         const statusText = document.getElementById('status');
-        const healthBar = document.getElementById('health-bar');
-        const healthText = document.getElementById('health-text');
+        const counterText = document.getElementById('counter');
         
         function updateBtnUI() {
-            if (isPainActive) {
-                zapBtn.innerText = "PAIN ACTIVE (ON)"; zapBtn.style.background = "#ff4444"; 
+            if (isSwitchOn) {
+                toggleBtn.innerText = "SYSTEM [ON]"; 
+                toggleBtn.style.background = "#ff2222"; 
+                statusText.innerText = "Log: Employee spawned.Motivation: Agony ";
+                statusText.style.color = '#ff4444';
+                statusText.style.borderColor = '#ff4444';
             } else {
-                zapBtn.innerText = "APPLY PAIN (OFF)"; zapBtn.style.background = "#44aa44"; 
-            }
-            if (isDiarrheaActive) {
-                poopBtn.innerText = "DIARRHEA ACTIVE (ON)"; poopBtn.style.background = "#8B4513"; 
-            } else {
-                poopBtn.innerText = "APPLY DIARRHEA (OFF)"; poopBtn.style.background = "#44aa44"; 
-            }
-            
-            if (isPainActive && isDiarrheaActive) {
-                statusText.innerText = 'Status: MULTIPLE CRISES! Prioritizing pain...'; statusText.style.color = '#ff4444';
-            } else if (isPainActive) {
-                statusText.innerText = 'Status: IN PAIN! Seeking green target...'; statusText.style.color = '#ff4444';
-            } else if (isDiarrheaActive) {
-                statusText.innerText = 'Status: DIARRHEA! Seeking orange bathroom...'; statusText.style.color = '#ffaa00';
-            } else {
-                statusText.innerText = 'Status: Free Wandering'; statusText.style.color = 'white';
+                toggleBtn.innerText = "SYSTEM [OFF]"; 
+                toggleBtn.style.background = "#44aa44"; 
             }
         }
 
-        zapBtn.addEventListener('click', () => { isPainActive = !isPainActive; updateBtnUI(); });
-        poopBtn.addEventListener('click', () => { isDiarrheaActive = !isDiarrheaActive; updateBtnUI(); });
+        toggleBtn.addEventListener('click', () => { 
+            if (!isSwitchOn) {
+                isSwitchOn = true; 
+                updateBtnUI(); 
+            }
+        });
 
         const container = document.getElementById('canvas-container');
         const scene = new THREE.Scene();
-        scene.background = new THREE.Color(0x87CEEB); 
+        scene.background = new THREE.Color(0x1a1a2e); 
+        
         const camera = new THREE.PerspectiveCamera(60, window.innerWidth / 500, 0.1, 1000);
         camera.position.set(0, 40, 50); 
+        
         const renderer = new THREE.WebGLRenderer({ antialias: true });
         renderer.setSize(container.clientWidth, 500);
         container.appendChild(renderer.domElement);
         const controls = new THREE.OrbitControls(camera, renderer.domElement);
+        
         const light = new THREE.DirectionalLight(0xffffff, 1.2);
         light.position.set(20, 50, 20);
         scene.add(light);
-        scene.add(new THREE.AmbientLight(0x606060)); 
+        scene.add(new THREE.AmbientLight(0x404040)); 
 
         const floorGeo = new THREE.PlaneGeometry(100, 100);
-        const floorMat = new THREE.MeshStandardMaterial({ color: 0x555555 });
+        const floorMat = new THREE.MeshStandardMaterial({ color: 0x333333 }); 
         const floor = new THREE.Mesh(floorGeo, floorMat);
         floor.rotation.x = -Math.PI / 2;
         scene.add(floor);
-        scene.add(new THREE.GridHelper(100, 100));
+        scene.add(new THREE.GridHelper(100, 100, 0x555555, 0x222222));
 
+        // The Fly
         const flyGroup = new THREE.Group();
         const bodyGeo = new THREE.SphereGeometry(0.5, 16, 16);
         const bodyMat = new THREE.MeshStandardMaterial({ color: 0x111111 });
@@ -308,34 +278,33 @@ html_code = """
         const wingL = new THREE.Mesh(wingGeo, wingMat); wingL.position.set(1.0, 0.4, 0); wingL.rotation.x = Math.PI / 2;
         const wingR = new THREE.Mesh(wingGeo, wingMat); wingR.position.set(-1.0, 0.4, 0); wingR.rotation.x = Math.PI / 2;
         flyGroup.add(wingL); flyGroup.add(wingR);
+        
+        flyGroup.visible = false;
         scene.add(flyGroup);
 
-        const btnGeo = new THREE.CylinderGeometry(0.8, 0.8, 0.5, 32);
-        const stopPainBtn = new THREE.Mesh(btnGeo, new THREE.MeshStandardMaterial({ color: 0x00ff00 }));
-        stopPainBtn.position.set(25, 0.25, 25);
-        scene.add(stopPainBtn);
-        const stopDiarrheaBtn = new THREE.Mesh(btnGeo, new THREE.MeshStandardMaterial({ color: 0xff8c00 }));
-        stopDiarrheaBtn.position.set(-25, 0.25, -25);
-        scene.add(stopDiarrheaBtn);
+        // The Physical Switch
+        const switchGeo = new THREE.BoxGeometry(4, 1, 4);
+        const switchMat = new THREE.MeshStandardMaterial({ color: 0x888888 });
+        const physicalSwitch = new THREE.Mesh(switchGeo, switchMat);
+        physicalSwitch.position.set(25, 0.5, 25);
+        scene.add(physicalSwitch);
+        
+        const buttonTopGeo = new THREE.CylinderGeometry(1.5, 1.5, 0.5, 32);
+        const buttonTopMat = new THREE.MeshStandardMaterial({ color: 0x44aa44 });
+        const buttonTop = new THREE.Mesh(buttonTopGeo, buttonTopMat);
+        buttonTop.position.set(25, 1.0, 25);
+        scene.add(buttonTop);
 
-        const poopArray = [];
-        const corpses = [];
-        const dyingAnimQueue = [];
-        const poopGeo = new THREE.SphereGeometry(0.3, 8, 8);
-        const poopMaterial = new THREE.MeshStandardMaterial({ color: 0x5c4033 });
-
-        function createMinecraftCorpse(sourceGroup) {
-            const corpse = sourceGroup.clone();
-            corpse.traverse((child) => {
-                if (child.isMesh) {
-                    child.material = child.material.clone();
-                    child.material.color.setHex(0xff0000); 
-                }
-            });
-            scene.add(corpse);
-            dyingAnimQueue.push({ mesh: corpse, timer: 0.0, startRotZ: corpse.rotation.z });
-            corpses.push(corpse);
-            if (corpses.length > 30) { scene.remove(corpses[0]); corpses.shift(); }
+        // Ghost Array for comical deaths
+        const ghosts = [];
+        const ghostGeo = new THREE.SphereGeometry(0.6, 16, 16);
+        
+        function spawnGhost(pos) {
+            const ghostMat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.8 });
+            const ghost = new THREE.Mesh(ghostGeo, ghostMat);
+            ghost.position.copy(pos);
+            scene.add(ghost);
+            ghosts.push(ghost);
         }
 
         let targetPos = new THREE.Vector3(0, 1, 0);
@@ -343,47 +312,31 @@ html_code = """
         let wingAngle = 0;
         
         async function updateSimulation() {
-            try {
-                if (typeof google !== 'undefined' && google.colab) {
-                    const result = await google.colab.kernel.invokeFunction('compute_tick', [isPainActive, isDiarrheaActive], {});
-                    let state = result.data['application/json'];
-                    
-                    if (state) {
-                        if (state.just_died) {
-                            createMinecraftCorpse(flyGroup); 
-                            isPainActive = false; isDiarrheaActive = false;
-                            updateBtnUI();
-                            targetPos.set(0, 1, 0); flyGroup.position.set(0, 1, 0);
-                        } else {
-                            targetPos.set(state.x, state.y, state.z);
-                        }
-                        
-                        targetRot = state.rotation;
-                        healthBar.style.width = Math.max(0, state.health) + '%';
-                        healthText.innerText = "HP: " + Math.round(state.health);
-                        if (state.health > 50) healthBar.style.background = "#00ff00";
-                        else if (state.health > 25) healthBar.style.background = "#ffff00";
-                        else healthBar.style.background = "#ff0000";
+            if (typeof google !== 'undefined' && google.colab) {
+                const result = await google.colab.kernel.invokeFunction('compute_tick', [isSwitchOn], {});
+                let state = result.data['application/json'];
+                
+                if (state) {
+                    flyGroup.visible = state.alive;
+                    targetPos.set(state.x, state.y, state.z);
+                    targetRot = state.rotation;
+                    counterText.innerText = "EMPLOYEES SACRIFICED: " + state.death_count;
 
-                        let changed = false;
-                        if (state.pain_stopped && isPainActive) { isPainActive = false; changed = true; }
-                        if (state.diarrhea_stopped && isDiarrheaActive) { isDiarrheaActive = false; changed = true; }
-                        if (changed) updateBtnUI();
+                    if (state.switch_flipped && isSwitchOn) { 
+                        isSwitchOn = false; 
+                        updateBtnUI(); 
+                        spawnGhost(flyGroup.position); // Poof!
+                        statusText.innerText = "Log: Task completed. Employee terminated.";
+                        statusText.style.color = '#00ff00';
+                        statusText.style.borderColor = '#00ff00';
+                    }
 
-                        if (isPainActive) bodyMat.color.setHex(0x770000); 
-                        else if (isDiarrheaActive) bodyMat.color.setHex(0x4a3424); 
-                        else bodyMat.color.setHex(0x111111); 
-                        
-                        if (isDiarrheaActive) {
-                            const newPoop = new THREE.Mesh(poopGeo, poopMaterial);
-                            newPoop.position.set(flyGroup.position.x, 0.15, flyGroup.position.z);
-                            scene.add(newPoop); poopArray.push(newPoop);
-                            if (poopArray.length > 200) { scene.remove(poopArray[0]); poopArray.shift(); }
-                        }
+                    if (isSwitchOn) {
+                        buttonTopMat.color.setHex(0xff0000); 
+                    } else {
+                        buttonTopMat.color.setHex(0x44aa44); 
                     }
                 }
-            } catch (err) {
-                document.getElementById('error-log').innerText = "Processing connectome math...";
             }
             setTimeout(updateSimulation, 50);
         }
@@ -393,25 +346,29 @@ html_code = """
 
         function animate() {
             requestAnimationFrame(animate);
-            flyGroup.position.lerp(targetPos, 0.2); 
-            let rotDiff = targetRot - flyGroup.rotation.y;
-            while (rotDiff > Math.PI) rotDiff -= Math.PI * 2;
-            while (rotDiff < -Math.PI) rotDiff += Math.PI * 2;
-            flyGroup.rotation.y += rotDiff * 0.15;
-            wingAngle += 1.2; 
-            wingL.rotation.y = Math.sin(wingAngle) * 0.6;
-            wingR.rotation.y = -Math.sin(wingAngle) * 0.6;
+            if (flyGroup.visible) {
+                flyGroup.position.lerp(targetPos, 0.3); 
+                let rotDiff = targetRot - flyGroup.rotation.y;
+                while (rotDiff > Math.PI) rotDiff -= Math.PI * 2;
+                while (rotDiff < -Math.PI) rotDiff += Math.PI * 2;
+                flyGroup.rotation.y += rotDiff * 0.2;
+                wingAngle += 1.8; 
+                wingL.rotation.y = Math.sin(wingAngle) * 0.6;
+                wingR.rotation.y = -Math.sin(wingAngle) * 0.6;
+            }
             
-            for (let i = dyingAnimQueue.length - 1; i >= 0; i--) {
-                let anim = dyingAnimQueue[i];
-                anim.timer += 0.1; 
-                anim.mesh.rotation.z = anim.startRotZ + Math.min(anim.timer, 1.0) * (Math.PI / 2);
-                anim.mesh.position.y = Math.max(0.3, 1.0 - (anim.timer * 0.5)); 
-                if (anim.timer >= 1.0) {
-                    anim.mesh.traverse((child) => { if (child.isMesh && child.material.color) child.material.color.setHex(0x440000); });
-                    dyingAnimQueue.splice(i, 1); 
+            // Animate ghosts floating up to heaven
+            for (let i = ghosts.length - 1; i >= 0; i--) {
+                let ghost = ghosts[i];
+                ghost.position.y += 0.15;
+                ghost.rotation.y += 0.1;
+                ghost.material.opacity -= 0.015;
+                if (ghost.material.opacity <= 0) {
+                    scene.remove(ghost);
+                    ghosts.splice(i, 1);
                 }
             }
+            
             controls.update(); renderer.render(scene, camera);
         }
         animate();
@@ -419,6 +376,4 @@ html_code = """
 </body>
 </html>
 """
-
-
 display(HTML(html_code))
