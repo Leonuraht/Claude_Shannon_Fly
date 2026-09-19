@@ -27,7 +27,5 @@
   <source src="recording.mp4" type="video/mp4">
 </video>
 
-
-
 ### I have no job and i must work                                                   
 ### -fly
